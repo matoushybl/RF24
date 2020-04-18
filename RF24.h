@@ -15,7 +15,9 @@
 #ifndef __RF24_H__
 #define __RF24_H__
 
+#include <cstdint>
 #include "RF24_config.h"
+#include "RFSPI.h"
 
 #if defined (RF24_LINUX) || defined (LITTLEWIRE)
     #include "utility/includes.h"
@@ -77,6 +79,8 @@ private:
     GPIO gpio;
     #endif
 
+    RFSPI spi;
+
     uint16_t ce_pin; /**< "Chip Enable" pin, activates the RX or TX role */
     uint16_t csn_pin; /**< SPI Chip select */
     uint16_t spi_speed; /**< SPI Bus Speed */
@@ -120,7 +124,7 @@ public:
      * @param _cepin The pin attached to Chip Enable on the RF module
      * @param _cspin The pin attached to Chip Select
      */
-    RF24(uint16_t _cepin, uint16_t _cspin);
+    RF24();
     //#if defined (RF24_LINUX)
 
     /**

@@ -10,6 +10,42 @@
 #include "RF24_config.h"
 #include "RF24.h"
 
+#include <libopencm3/stm32/gpio.h>
+#include "../../src/SysTick.h"
+#include "../../src/printf.h"
+
+#define PROGMEM
+
+#define pgm_read_ptr(p) (*(p))
+#define pgm_read_word(p) (*(p))
+#define pgm_read_byte(p) (*(p))
+
+#define CSN GPIO4
+#define CS_PORT GPIOA
+
+#define CE GPIO8
+#define CE_PORT GPIOA
+
+#define LOW false
+#define HIGH true
+
+#define _SPI spi
+
+
+#define PSTR(x) (x)
+
+#define PRIPSTR "%s"
+
+#define printf_P printf
+
+#undef SERIAL_DEBUG
+#ifdef SERIAL_DEBUG
+#define IF_SERIAL_DEBUG(x) ({x;})
+#else
+#define IF_SERIAL_DEBUG(x)
+#endif
+
+#define _BV(x) (1 << (x))
 
 #if ARDUINO_API_VERSION >= 10000 && !defined(__DOXYGEN__)
 inline void digitalWrite(uint8_t pin, bool value) 
@@ -20,92 +56,35 @@ inline void digitalWrite(uint8_t pin, bool value)
 
 /****************************************************************************/
 
-void RF24::csn(bool mode)
-{
-    #if defined(RF24_TINY)
-    if (ce_pin != csn_pin) {
-        digitalWrite(csn_pin, mode);
-    }
-    else {
-        if (mode == HIGH) {
-            PORTB |= (1<<PINB2);  	// SCK->CSN HIGH
-            delayMicroseconds(100); // allow csn to settle.
-        }
-        else {
-            PORTB &= ~(1<<PINB2);	// SCK->CSN LOW
-            delayMicroseconds(11);  // allow csn to settle
-        }
-    }
-    // Return, CSN toggle complete
-    return;
-
-    #elif defined(ARDUINO) && !defined(RF24_SPI_TRANSACTIONS)
-    // Minimum ideal SPI bus speed is 2x data rate
-    // If we assume 2Mbs data rate and 16Mhz clock, a
-    // divider of 4 is the minimum we want.
-    // CLK:BUS 8Mhz:2Mhz, 16Mhz:4Mhz, or 20Mhz:5Mhz
-
-        #if !defined(SOFTSPI)
-        _SPI.setBitOrder(MSBFIRST);
-        _SPI.setDataMode(SPI_MODE0);
-                #if !defined(F_CPU) || F_CPU < 20000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV2);
-                    #elif F_CPU < 40000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV4);
-                    #elif F_CPU < 80000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV8);
-                    #elif F_CPU < 160000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV16);
-                    #elif F_CPU < 320000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV32);
-                    #elif F_CPU < 640000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV64);
-                    #elif F_CPU < 1280000000
-            _SPI.setClockDivider(SPI_CLOCK_DIV128);
-                    #else
-                        #error "Unsupported CPU frequency. Please set correct SPI divider."
-                    #endif
-
-                #endif
-    #elif defined(RF24_RPi)
-    if(!mode)
-      _SPI.chipSelect(csn_pin);
-    #endif // defined(RF24_RPi)
-
-    #if !defined(RF24_LINUX)
-    digitalWrite(csn_pin, mode);
-    delayMicroseconds(csDelay);
-    #endif // !defined(RF24_LINUX)
-}
-
-/****************************************************************************/
-
-void RF24::ce(bool level)
-{
-    //Allow for 3-pin use on ATTiny
-    if (ce_pin != csn_pin) {
-        digitalWrite(ce_pin, level);
+void RF24::csn(bool mode) {
+    if (mode) {
+        gpio_set(CS_PORT, CSN);
+        SysTick::delayMicroseconds(1);
+    } else {
+        gpio_clear(CS_PORT, CSN);
     }
 }
 
 /****************************************************************************/
 
-inline void RF24::beginTransaction()
-{
-    #if defined(RF24_SPI_TRANSACTIONS)
-    _SPI.beginTransaction(SPISettings(RF24_SPI_SPEED, MSBFIRST, SPI_MODE0));
-    #endif // defined(RF24_SPI_TRANSACTIONS)
+void RF24::ce(bool level) {
+    if (level) {
+        gpio_set(CE_PORT, CE);
+    } else {
+        gpio_clear(CE_PORT, CE);
+    }
+}
+
+/****************************************************************************/
+
+inline void RF24::beginTransaction() {
     csn(LOW);
 }
 
 /****************************************************************************/
 
-inline void RF24::endTransaction()
-{
+inline void RF24::endTransaction() {
     csn(HIGH);
-    #if defined(RF24_SPI_TRANSACTIONS)
-    _SPI.endTransaction();
-    #endif // defined(RF24_SPI_TRANSACTIONS)
 }
 
 /****************************************************************************/
@@ -211,28 +190,10 @@ uint8_t RF24::write_register(uint8_t reg, const uint8_t* buf, uint8_t len)
 uint8_t RF24::write_register(uint8_t reg, uint8_t value)
 {
     uint8_t status;
-
-    IF_SERIAL_DEBUG(printf_P(PSTR("write_register(%02x,%02x)\r\n"), reg, value));
-
-    #if defined(RF24_LINUX)
-    beginTransaction();
-    uint8_t * prx = spi_rxbuff;
-    uint8_t * ptx = spi_txbuff;
-    *ptx++ = ( W_REGISTER | ( REGISTER_MASK & reg ) );
-    *ptx = value ;
-
-    _SPI.transfernb( (char *) spi_txbuff, (char *) spi_rxbuff, 2);
-    status = *prx++; // status is 1st byte of receive buffer
-    endTransaction();
-    #else // !defined(RF24_LINUX)
-
     beginTransaction();
     status = _SPI.transfer(W_REGISTER | (REGISTER_MASK & reg));
     _SPI.transfer(value);
     endTransaction();
-
-    #endif // !defined(RF24_LINUX)
-
     return status;
 }
 
@@ -437,8 +398,8 @@ void RF24::print_address_register(const char* name, uint8_t reg, uint8_t qty)
 
 /****************************************************************************/
 
-RF24::RF24(uint16_t _cepin, uint16_t _cspin)
-        :ce_pin(_cepin), csn_pin(_cspin), p_variant(false), payload_size(32), dynamic_payloads_enabled(false), addr_width(5),
+RF24::RF24()
+        :ce_pin(0), csn_pin(0), p_variant(false), payload_size(32), dynamic_payloads_enabled(false), addr_width(5),
          csDelay(5)//,pipe0_reading_address(0)
 {
     pipe0_reading_address[0] = 0;
@@ -606,68 +567,13 @@ bool RF24::begin(void)
 
     uint8_t setup = 0;
 
-    #if defined(RF24_LINUX)
 
-        #if defined(MRAA)
-    GPIO();
-    gpio.begin(ce_pin,csn_pin);
-        #endif
-
-        #if defined(RF24_RPi)
-    switch(csn_pin){     //Ensure valid hardware CS pin
-      case 0: break;
-      case 1: break;
-      // Allow BCM2835 enums for RPi
-      case 8: csn_pin = 0; break;
-      case 7: csn_pin = 1; break;
-      case 18: csn_pin = 10; break;	//to make it work on SPI1
-      case 17: csn_pin = 11; break;
-      case 16: csn_pin = 12; break;
-      default: csn_pin = 0; break;
-    }
-        #endif // RF24_RPi
-
-    _SPI.begin(csn_pin);
-
-    pinMode(ce_pin,OUTPUT);
-    ce(LOW);
-
-    delay(100);
-
-    #elif defined(LITTLEWIRE)
-
-    pinMode(csn_pin,OUTPUT);
-        _SPI.begin();
-        csn(HIGH);
-
-    #elif defined(XMEGA_D3)
-    if (ce_pin != csn_pin) {
-        pinMode(ce_pin,OUTPUT);
-    };
-    _SPI.begin(csn_pin);
-    ce(LOW);
-    csn(HIGH);
-    delay(200);
-    #else
-    // Initialize pins
-    if (ce_pin != csn_pin) {
-        pinMode(ce_pin, OUTPUT);
-    }
-
-        #if !defined(LITTLEWIRE)
-    if (ce_pin != csn_pin)
-        #endif // !defined(LITTLEWIRE)
-    {
-        pinMode(csn_pin, OUTPUT);
-    }
+    gpio_mode_setup(CS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, CSN);
+    gpio_mode_setup(CE_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, CE);
 
     _SPI.begin();
     ce(LOW);
     csn(HIGH);
-            #if defined(__ARDUINO_X86__)
-    delay(100);
-            #endif
-        #endif //Linux
 
     // Must allow the radio time to settle else configuration bits will not necessarily stick.
     // This is actually only required following power up but some settling time also appears to
@@ -675,7 +581,7 @@ bool RF24::begin(void)
     // Enabling 16b CRC is by far the most obvious case if the wrong timing is used - or skipped.
     // Technically we require 4.5ms + 14us as a worst case. We'll just call it 5ms for good measure.
     // WARNING: Delay is based on P-variant whereby non-P *may* require different timing.
-    delay(5);
+    SysTick::delay(5);
 
     // Reset NRF_CONFIG and enable 16-bit CRC.
     write_register(NRF_CONFIG, 0x0C);
@@ -771,7 +677,7 @@ void RF24::startListening(void)
     }
 
     // Go!
-    //delayMicroseconds(100);
+    //SysTick::delayMicroseconds(100);
 }
 
 /****************************************************************************/
@@ -782,10 +688,10 @@ void RF24::stopListening(void)
 {
     ce(LOW);
 
-    delayMicroseconds(txDelay);
+    SysTick::delayMicroseconds(txDelay);
 
     if (read_register(FEATURE) & _BV(EN_ACK_PAY)) {
-        delayMicroseconds(txDelay); //200
+        SysTick::delayMicroseconds(txDelay); //200
         flush_tx();
     }
     //flush_rx();
@@ -800,7 +706,7 @@ void RF24::stopListening(void)
     #endif
     write_register(EN_RXADDR, read_register(EN_RXADDR) | _BV(pgm_read_byte(&child_pipe_enable[0]))); // Enable RX on pipe0
 
-    //delayMicroseconds(100);
+    //SysTick::delayMicroseconds(100);
 
 }
 
@@ -826,7 +732,7 @@ void RF24::powerUp(void)
         // For nRF24L01+ to go from power down mode to TX or RX mode it must first pass through stand-by mode.
         // There must be a delay of Tpd2stby (see Table 16.) after the nRF24L01+ leaves power down mode before
         // the CEis set high. - Tpd2stby can be up to 5ms per the 1.0 datasheet
-        delay(5);
+        SysTick::delay(5);
     }
 }
 
@@ -856,12 +762,12 @@ bool RF24::write(const void* buf, uint8_t len, const bool multicast)
 
     //Wait until complete or failed
     #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-    uint32_t timer = millis();
+    uint32_t timer = SysTick::millis();
     #endif // defined(FAILURE_HANDLING) || defined(RF24_LINUX)
 
     while (!(get_status() & (_BV(TX_DS) | _BV(MAX_RT)))) {
         #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-        if (millis() - timer > 95) {
+        if (SysTick::millis() - timer > 95) {
             errNotify();
             #if defined(FAILURE_HANDLING)
             return 0;
@@ -899,19 +805,19 @@ bool RF24::writeBlocking(const void* buf, uint8_t len, uint32_t timeout)
     //This way the FIFO will fill up and allow blocking until packets go through
     //The radio will auto-clear everything in the FIFO as long as CE remains high
 
-    uint32_t timer = millis();                              //Get the time that the payload transmission started
+    uint32_t timer = SysTick::millis();                              //Get the time that the payload transmission started
 
     while ((get_status()
             & (_BV(TX_FULL)))) {          //Blocking only if FIFO is full. This will loop and block until TX is successful or timeout
 
         if (get_status() & _BV(MAX_RT)) {                      //If MAX Retries have been reached
             reUseTX();                                          //Set re-transmit and clear the MAX_RT interrupt flag
-            if (millis() - timer > timeout) {
+            if (SysTick::millis() - timer > timeout) {
                 return 0;
             }          //If this payload has exceeded the user-defined timeout, exit and return 0
         }
         #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-        if (millis() - timer > (timeout + 95)) {
+        if (SysTick::millis() - timer > (timeout + 95)) {
             errNotify();
             #if defined(FAILURE_HANDLING)
             return 0;
@@ -947,7 +853,7 @@ bool RF24::writeFast(const void* buf, uint8_t len, const bool multicast)
     //The radio will auto-clear everything in the FIFO as long as CE remains high
 
     #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-    uint32_t timer = millis();
+    uint32_t timer = SysTick::millis();
     #endif
 
     //Blocking only if FIFO is full. This will loop and block until TX is successful or fail
@@ -959,7 +865,7 @@ bool RF24::writeFast(const void* buf, uint8_t len, const bool multicast)
             // From the user perspective, if you get a 0, just keep trying to send the same payload
         }
         #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-        if (millis() - timer > 95) {
+        if (SysTick::millis() - timer > 95) {
             errNotify();
             #if defined(FAILURE_HANDLING)
             return 0;
@@ -1009,7 +915,7 @@ void RF24::startWrite(const void* buf, uint8_t len, const bool multicast)
     write_payload(buf, len, multicast ? W_TX_PAYLOAD_NO_ACK : W_TX_PAYLOAD);
     ce(HIGH);
     #if !defined(F_CPU) || F_CPU > 20000000
-    delayMicroseconds(10);
+    SysTick::delayMicroseconds(10);
     #endif
     ce(LOW);
 }
@@ -1027,7 +933,7 @@ bool RF24::txStandBy()
 {
 
     #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-    uint32_t timeout = millis();
+    uint32_t timeout = SysTick::millis();
     #endif
     while (!(read_register(FIFO_STATUS) & _BV(TX_EMPTY))) {
         if (get_status() & _BV(MAX_RT)) {
@@ -1037,7 +943,7 @@ bool RF24::txStandBy()
             return 0;
         }
         #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-        if (millis() - timeout > 95) {
+        if (SysTick::millis() - timeout > 95) {
             errNotify();
             #if defined(FAILURE_HANDLING)
             return 0;
@@ -1059,21 +965,21 @@ bool RF24::txStandBy(uint32_t timeout, bool startTx)
         stopListening();
         ce(HIGH);
     }
-    uint32_t start = millis();
+    uint32_t start = SysTick::millis();
 
     while (!(read_register(FIFO_STATUS) & _BV(TX_EMPTY))) {
         if (get_status() & _BV(MAX_RT)) {
             write_register(NRF_STATUS, _BV(MAX_RT));
             ce(LOW); // Set re-transmit
             ce(HIGH);
-            if (millis() - start >= timeout) {
+            if (SysTick::millis() - start >= timeout) {
                 ce(LOW);
                 flush_tx();
                 return 0;
             }
         }
         #if defined(FAILURE_HANDLING) || defined(RF24_LINUX)
-        if (millis() - start > (timeout + 95)) {
+        if (SysTick::millis() - start > (timeout + 95)) {
             errNotify();
             #if defined(FAILURE_HANDLING)
             return 0;
@@ -1122,7 +1028,7 @@ uint8_t RF24::getDynamicPayloadSize(void)
 
     if (result > 32) {
         flush_rx();
-        delay(2);
+        SysTick::delay(2);
         return 0;
     }
     return result;
@@ -1222,7 +1128,9 @@ void RF24::openReadingPipe(uint8_t child, uint64_t address)
     // openWritingPipe() will overwrite the pipe 0 address, so
     // startListening() will have to restore it.
     if (child == 0) {
-        memcpy(pipe0_reading_address, &address, addr_width);
+        for (int i = 0; i < addr_width; ++i) {
+            pipe0_reading_address[i] = reinterpret_cast<uint8_t*>(&address)[i];
+        }
     }
 
     if (child <= 6) {
@@ -1264,7 +1172,9 @@ void RF24::openReadingPipe(uint8_t child, const uint8_t* address)
     // openWritingPipe() will overwrite the pipe 0 address, so
     // startListening() will have to restore it.
     if (child == 0) {
-        memcpy(pipe0_reading_address, address, addr_width);
+        for (int i = 0; i < addr_width; ++i) {
+            pipe0_reading_address[i] = reinterpret_cast<uint8_t*>(&address)[i];
+        }
     }
     if (child <= 6) {
         // For pipes 2-5, only write the LSB
