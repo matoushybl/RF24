@@ -11,8 +11,8 @@
 #include "RF24.h"
 
 #include <libopencm3/stm32/gpio.h>
-#include "../../src/SysTick.h"
-#include "../../src/printf.h"
+#include "../../include/plane/SysTick.h"
+#include "../../include/plane/printf.h"
 
 #define PROGMEM
 

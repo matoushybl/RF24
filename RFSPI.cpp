@@ -33,13 +33,13 @@ uint8_t RFSPI::transfer(uint8_t tx_) {
 }
 
 void RFSPI::transfernb(char *tbuf, char *rbuf, uint32_t len) {
-    for (int i = 0; i < len; ++i) {
+    for (uint32_t i = 0; i < len; ++i) {
         rbuf[i] = transfer(tbuf[i]);
     }
 }
 
 void RFSPI::transfern(char *buf, uint32_t len) {
-    for (int i = 0; i < len; ++i) {
+    for (uint32_t i = 0; i < len; ++i) {
         transfer(buf[i]);
     }
 }
